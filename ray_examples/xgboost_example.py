@@ -66,7 +66,7 @@ def read_parquet_to_pandas(uri: str, columns=None, limit: int | None = None) -> 
     return pa.Table.from_batches(batches).to_pandas()
 
 
-def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, DEV_FAST: bool = False):
+def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, experiment_name:str, DEV_FAST: bool = False):
     """
     Quick knobs:
       - num_workers * cpus_per_worker = CPUs per trial.
@@ -77,6 +77,7 @@ def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, DEV_FAST
       - nthread = cpus_per_worker to avoid oversubscription.
     """
 
+    _ensure_experiment(experiment_name)
     # Storage: local for dev, S3/your env otherwise
     RUN_STORAGE = os.environ.get("RAY_AIR_STORAGE", "s3://ddl-wadkars/navy/air/xgb")
     TUNER_STORAGE = "/tmp/air-dev" if DEV_FAST else RUN_STORAGE
