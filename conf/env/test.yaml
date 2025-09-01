@@ -1,0 +1,6 @@
+env: test   # pick default environment
+
+ray:
+  num_workers: 4
+  cpus_per_worker: 1
+  dev_fast: false
