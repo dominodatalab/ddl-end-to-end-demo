@@ -308,7 +308,6 @@ def load_config_and_execute(cfg: DictConfig):
     ray.shutdown()
     ensure_ray_connected(RAY_JOB_ENV,ray_ns=app_name)    
     os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"] = "1"
-    os.environ["HYDRA_FULL_ERROR"]= "1"
     main(experiment_name=experiment_name,data_dir=data_dir, num_workers=4, cpus_per_worker=1,DEV_FAST=dev_fast)
     
 if __name__ == "__main__":
