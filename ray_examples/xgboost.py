@@ -26,27 +26,32 @@ try:
     from ray.tune.callback import Callback      # Ray >= 2.6
 except ImportError:
     from ray.tune.callbacks import Callback     # Older Ray
+from typing import Dict
+from utils import mlflow_utils
 
-# -------- IRSA: pass env vars to workers --------
+import hydra
+from omegaconf import DictConfig
+from omegaconf import OmegaConf
 
 
-#if DEV_FAST else RUN_STORAGE,  # local is faster
-#os.makedirs(RUN_STORAGE, exist_ok=True)
-
-# -------- IRSA: pass env vars to workers --------
-RAY_JOB_ENV = {
-    "AWS_ROLE_ARN": os.environ.get("AWS_ROLE_ARN", ""),
-    "AWS_WEB_IDENTITY_TOKEN_FILE": os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE", ""),
-    "AWS_REGION": os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")),
-    "AWS_DEFAULT_REGION": os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")),
-    "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS":"1",
-    "TUNE_RESULT_BUFFER_LENGTH": "16",
-    "TUNE_RESULT_BUFFER_FLUSH_INTERVAL_S": "3",    
-    
-}
+def ensure_ray_connected(ray_envs: Dict[str,str], ray_ns:str):
+    if ray.is_initialized():
+        return
+    # Reconnect to the running cluster (prefers ray:// if present)
+    addr = None
+    if "RAY_HEAD_SERVICE_HOST" in os.environ and "RAY_HEAD_SERVICE_PORT" in os.environ:
+        addr = f"ray://{os.environ['RAY_HEAD_SERVICE_HOST']}:{os.environ['RAY_HEAD_SERVICE_PORT']}"
+    ray.init(
+        address=addr or "auto",
+        runtime_env={"env_vars": ray_envs},   # same env you used earlier
+        namespace=ray_ns,
+        ignore_reinit_error=True,
+    )
 
 def _s3p(root: str, sub: str) -> str:
-    return f"{root.rstrip('/')}/{sub}"
+    """Safe join for S3/posix URIs."""
+    return f"{root.rstrip('/')}/{sub.lstrip('/')}"
+
 
 def read_parquet_to_pandas(uri: str, columns=None, limit: int | None = None) -> pd.DataFrame:
     """
@@ -68,7 +73,7 @@ def read_parquet_to_pandas(uri: str, columns=None, limit: int | None = None) -> 
     return pa.Table.from_batches(batches).to_pandas()
 
 
-def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, experiment_name:str, DEV_FAST: bool = False):
+def main(experiment_name:str,data_dir: str,num_workers: int = 4, cpus_per_worker: int = 1,  DEV_FAST: bool = False):
     """
     Quick knobs:
       - num_workers * cpus_per_worker = CPUs per trial.
@@ -79,12 +84,13 @@ def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, experime
       - nthread = cpus_per_worker to avoid oversubscription.
     """
 
-    _ensure_experiment(experiment_name)
+    exp_id = mlflow_utils.ensure_mlflow_experiment(experiment_name)
+    
     # Storage: local for dev, S3/your env otherwise
-    RUN_STORAGE = os.environ.get("RAY_AIR_STORAGE", "s3://ddl-wadkars/navy/air/xgb")
+    RUN_STORAGE = os.environ.get("RAY_AIR_STORAGE",f"{data_dir}/air/xgb")
     TUNER_STORAGE = "/tmp/air-dev" if DEV_FAST else RUN_STORAGE
-    FINAL_STORAGE = "/mnt/data/ddl-end-to-end-demo/air/final_fit" if DEV_FAST else RUN_STORAGE
-
+    #FINAL_STORAGE = "/mnt/data/ddl-end-to-end-demo/air/final_fit" if DEV_FAST else RUN_STORAGE
+    FINAL_STORAGE = RUN_STORAGE
     # Sanity: workers see IRSA env?
     @ray.remote
     def _peek():
@@ -101,15 +107,14 @@ def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, experime
     
     
     client = MlflowClient()
-    exp = mlflow.get_experiment_by_name(EXPERIMENT_NAME)
-    EXPERIMENT_ID = exp.experiment_id 
+
 
     parent = client.create_run(
-        experiment_id=EXPERIMENT_ID,
+        experiment_id=exp_id,
         tags={"mlflow.runName": "xgb_parent", "role": "tune_parent"},
     )
-    PARENT_RUN_ID = parent.info.run_id
-    print("Parent run id:", PARENT_RUN_ID)
+    parent_run_id = parent.info.run_id
+    print("Parent run id:", parent_run_id)
 
     # Data (Ray Datasets for training/val)
     train_ds = read_parquet(_s3p(data_dir, "train"), parallelism=num_workers)
@@ -198,9 +203,9 @@ def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, experime
     # MLflow callback (child runs)
     mlflow_cb = MLflowLoggerCallback(
         tracking_uri=CLUSTER_TRACKING_URI,
-        experiment_name=EXPERIMENT_NAME,
+        experiment_name=experiment_name,
         save_artifact=SAVE_ARTIFACTS,
-        tags={"mlflow.parentRunId": PARENT_RUN_ID},
+        tags={"mlflow.parentRunId": parent_run_id},
     )
 
     # Tuner
@@ -265,7 +270,7 @@ def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, experime
     
     # Log final under parent
 
-    with mlflow.start_run(run_id=PARENT_RUN_ID):
+    with mlflow.start_run(run_id=parent_run_id):
         X_example = X_test.head(5).copy()  
         y_example = booster.predict(xgb.DMatrix(X_example))
         sig = infer_signature(X_example, y_example)
@@ -275,6 +280,35 @@ def main(data_dir: str, num_workers: int = 4, cpus_per_worker: int = 1, experime
             mlflow.log_metric("valid_rmse_best", float(best.metrics.get("valid-rmse")))
             mlflow.log_metric("test_rmse", float(rmse))
             mlflow_xgb.log_model(booster, artifact_path="model",signature=sig,input_example=X_example)
-    run = client.get_run(PARENT_RUN_ID)
+    run = client.get_run(parent_run_id)
     if run.info.status == "RUNNING":
-        client.set_terminated(PARENT_RUN_ID, "FINISHED")
+        client.set_terminated(parent_run_id, "FINISHED")
+
+@hydra.main(config_path=None, config_name="config", version_base=None)
+def load_config_and_execute(cfg: DictConfig):
+    print(f"Running in {cfg.env} environment")
+    print(OmegaConf.to_yaml(cfg, resolve=True))
+    app_name = cfg.app.name
+    data_dir = cfg.app.data_dir
+    experiment_name = cfg.mlflow.experiment_name    
+    ray_workers = cfg.env.ray.num_workers
+    cpus_per_worker = cfg.env.ray.cpus_per_worker
+    dev_fast = cfg.env.ray.dev_fast    
+    
+    RAY_JOB_ENV = {
+        "AWS_ROLE_ARN": os.environ.get("AWS_ROLE_ARN", ""),
+        "AWS_WEB_IDENTITY_TOKEN_FILE": os.environ.get("AWS_WEB_IDENTITY_TOKEN_FILE", ""),
+        "AWS_REGION": os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")),
+        "AWS_DEFAULT_REGION": os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1")),
+        "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS":"1",
+        "TUNE_RESULT_BUFFER_LENGTH": "16",
+        "TUNE_RESULT_BUFFER_FLUSH_INTERVAL_S": "3",    
+        
+    }
+    ray.shutdown()
+    ensure_ray_connected(RAY_JOB_ENV,ray_ns=app_name)    
+    os.environ["TUNE_DISABLE_AUTO_CALLBACK_LOGGERS"] = "1"
+    main(experiment_name=experiment_name,data_dir=data_dir, num_workers=4, cpus_per_worker=1,DEV_FAST=dev_fast)
+    
+if __name__ == "__main__":
+    load_config_and_execute()

@@ -1,0 +1,18 @@
+defaults:
+  - _self_      
+  - env: dev   # pick default environment
+
+hydra:
+  run:
+    dir: /tmp/hydra/${now:%Y-%m-%d_%H-%M-%S}
+# global config values
+app:
+  name: "ray_xgboost"
+  data_dir: "s3://${oc.env:S3_BUCKET_NAME}/end-to-end/california"
+
+mlflow:
+  experiment_name: "ray-xgboost-${env.env}-${oc.env:DOMINO_STARTING_USERNAME,unknown}"
+
+ray:
+  num_workers: 1
+  cpus_per_worker: 1
