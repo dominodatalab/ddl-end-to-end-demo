@@ -8,7 +8,9 @@ from mlflow.entities.model_registry import ModelVersion
 from mlflow.models.model import ModelInfo
 from mlflow.store.artifact.runs_artifact_repo import RunsArtifactRepository
 from mlflow.exceptions import RestException
-
+from typing import Optional, Iterable, Union
+import numpy as np
+import pandas as pd
 def ensure_mlflow_experiment(experiment_name: str) -> int:
     """
     Ensure an MLflow experiment exists and set it as current.
@@ -97,3 +99,26 @@ def register_model_version(
         run_id=run.info.run_id,
         description=model_desc,
     )
+def load_registered_model_version(model_name: str, version: Union[int, str]) -> mlflow.pyfunc.PyFuncModel:
+    """
+    Load a registered model *version* as a PyFunc model.
+    Works regardless of how the model was trained/logged (XGBoost flavor included).
+
+    Example URI: models:/my_model/3
+    """
+    uri = f"models:/{model_name}/{version}"
+    return mlflow.pyfunc.load_model(uri)
+
+
+def predict_with_pyfunc(model: mlflow.pyfunc.PyFuncModel,
+                        X: Union[pd.DataFrame, np.ndarray, Iterable[Iterable[float]]]) -> np.ndarray:
+    """
+    Run predictions using a PyFunc model.
+    Accepts pandas DataFrame or numpy-like 2D structure.
+    """
+    if not isinstance(X, pd.DataFrame):
+        X = pd.DataFrame(X)
+    print(X)
+    y_pred = model.predict(X)
+    # Ensure numpy array
+    return np.asarray(y_pred)
