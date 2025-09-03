@@ -12,6 +12,8 @@ app:
 
 mlflow:
   experiment_name: "ray-xgboost-${env.env}-${oc.env:DOMINO_STARTING_USERNAME,unknown}"
+  model_name: "ray-xgboost-${env.env}-${oc.env:DOMINO_STARTING_USERNAME,unknown}"
+  model_desc: "ray-xgboost-${env.env}-${oc.env:DOMINO_STARTING_USERNAME,unknown}"
 
 ray:
   num_workers: 1
