@@ -33,7 +33,7 @@ Domino MLOps process involves the following steps:
 Some of the topics covered are-
 
 1. Hands on example of how to use [MLflow](mock_mlflow//README.md). A basic mlflow client [notebook](notebooks/basic_mlflow_client.ipynb) to demonstrate how to create an ML experiment using XGBoost, register it to Model Registry and then deploy it as a Domino Endpoint to be accessed via client programs.
-2. Basic [Spark based notebook](notebooks/basic_spark_job.ipynb) with the ability to scale up and down 
+2. Basic [Spark based notebook](notebooks/basic_spark_job.ipynb) with the ability to scale up and down. This demonstrates how you can use IRSA to connect Spark to your S3 bucket. 
 3. Basic [Ray based notebook](notebooks/basic_ray_job.ipynb) with the ability to scale up and down
 4. Example [notebook](notebooks/cluster_scaler_client.ipynb) demonstrating how to scale Spark/Ray/Dask clusters with an API endpoint
 5. Example [notebook](service_accounts/service_accounts_mgmt.ipynb) to create Service Accounts, configure them for use with Git backed projects and use them to execute jobs in Domino

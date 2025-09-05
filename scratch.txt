@@ -1,1 +1,2 @@
+```Test if you can get caller identity```
 aws sts get-caller-identity --no-cli-pager
