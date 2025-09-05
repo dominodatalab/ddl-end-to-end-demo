@@ -1,4 +1,6 @@
-from domino import Domino
+import os
+import requests
+
 def get_hw_tier_id(name: str):
     api_proxy = os.environ['DOMINO_API_PROXY']
     url = f"{api_proxy}/v4/hardwareTier"
