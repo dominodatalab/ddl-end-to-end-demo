@@ -39,3 +39,4 @@ Some of the topics covered are-
 5. Example [notebook](service_accounts/service_accounts_mgmt.ipynb) to create Service Accounts, configure them for use with Git backed projects and use them to execute jobs in Domino
 6. Example [notebook](mlflow_external_access/access_mlflow_externally.ipynb) demostrating to accesss Domino MLflow externally. This capability is crucial when downloading models using your CI/CD pipelines
 
+For Domino Flows follow this [repo](https://github.com/dominodatalab/domino-MLops-flows).
