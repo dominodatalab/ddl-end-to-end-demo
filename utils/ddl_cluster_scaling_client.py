@@ -6,8 +6,8 @@ Endpoints expected (server-side):
   - GET    /ddl_cluster_scaler/cluster/<kind>/<name>
   - PATCH  /ddl_cluster_scaler/scale/<kind>/<name>               (json: {"replicas": int, "head_hw_tier":str: ",
                                                                                 "worker_hw_tier":str} )
-  - PATCH  /ddl_cluster_scaler/restart-head/<kind>/<name>        (query: started_at=ISO8601)
-  - GET    /ddl_cluster_scaler/restart_head_status/<kind>/<name>    (query: started_at=ISO8601)
+  - PATCH  /ddl_cluster_scaler/restart-head/<kind>/<name>        (query: started_at=ISO8601)   (json: {"head_hw_tier": str})
+  - `GET    /ddl_cluster_scaler/restart_status/<kind>/<name>/<node_type>?started_at=<ISO-8601>` (node_type is `head` or `worker`)
 
 Environment variables used:
   - DOMINO_API_PROXY   : base URL that returns a Bearer token at /access-token (preferred)
@@ -91,20 +91,12 @@ def get_auth_headers() -> Dict[str, str]:
             return headers
         except requests.RequestException as e:
             raise RuntimeError(f"Failed to fetch token from DOMINO_API_PROXY: {e}") from e
+    else:
+        api_key = os.getenv("DOMINO_API_KEY")
+        if api_key:
+            headers["X-Domino-Api-Key"] = api_key.strip()
+            return headers
 
-    token = os.getenv("DOMINO_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token.strip()}"
-        return headers
-
-    api_key = os.getenv("DOMINO_API_KEY")
-    if api_key:
-        headers["X-Domino-Api-Key"] = api_key.strip()
-        return headers
-
-    raise RuntimeError(
-        "No auth source found. Set DOMINO_API_PROXY or DOMINO_TOKEN or DOMINO_API_KEY."
-    )
 
 
 def get_cluster_status(cluster_kind: str = "rayclusters"):
@@ -146,7 +138,7 @@ def get_cluster_status(cluster_kind: str = "rayclusters"):
     return resp.json()
 
 
-def scale_cluster(cluster_kind: str = "rayclusters", head_hw_tier_name:str="Small", worker_hw_tier_name:str="Small", replicas: int = 1):
+def scale_cluster(cluster_kind: str = "rayclusters", worker_hw_tier_name:str="Small", replicas: int = 1):
     """
     Scale a cluster's workers to `replicas`. Keeps the old interface:
       - `worker_hw_tier_name` is optional and passed through.
@@ -172,9 +164,6 @@ def scale_cluster(cluster_kind: str = "rayclusters", head_hw_tier_name:str="Smal
     if worker_hw_tier_name:
         # Backward/forward compatibility: send both keys
         body["worker_hw_tier_name"] = worker_hw_tier_name
-    if head_hw_tier_name:
-        # Backward/forward compatibility: send both keys
-        body["head_hw_tier_name"] = head_hw_tier_name
 
 
     resp = requests.patch(
@@ -192,56 +181,60 @@ def scale_cluster(cluster_kind: str = "rayclusters", head_hw_tier_name:str="Smal
     except Exception:
         return resp.text
 
+def get_cluster_restart_status(cluster_kind: str = "rayclusters",node_type:str ="worker",restart_ts:str=""):
+    run_id = os.environ.get("DOMINO_RUN_ID")
+    if not run_id:
+        raise RuntimeError("DOMINO_RUN_ID is not set")
 
-def is_scaling_complete(cluster_kind: str = "rayclusters") -> bool:
+    cluster_id_prefix = cluster_kind.replace("clusters", "")
+    cluster_id = f"{cluster_id_prefix}-{run_id}"
+    print(cluster_id)
+
+    # NOTE: server route is /ddl_cluster_scaler/cluster/<kind>/<name>
+    url = f"{BASE_URL}{SERVICE_PREFIX}/restart_status/{cluster_kind}/{cluster_id}/{node_type}"
+    print(url)
+    resp = requests.get(url, headers=get_auth_headers(), params={"started_at":restart_ts}, timeout=(3.05, 15))
+    print(f"Status code {resp.status_code}")
+    '''
+    resp.raise_for_status()
+
+    # Expect JSON; fail loudly if not
+    content_type = resp.headers.get("Content-Type", "")
+    if "application/json" not in content_type.lower():
+        # try anyway, then error
+        try:
+            return resp.json()
+        except Exception:
+            raise RuntimeError(f"Expected JSON from {url}, got Content-Type={content_type!r}")
+    '''
+    return resp.json()
+
+
+
+def is_restart_complete(cluster_kind: str = "rayclusters",node_type:str="worker",restart_ts:str="") -> bool:
     """
     True when the number of worker pods equals desired minReplicas.
     Assumes .status.nodes is [head, worker1, worker2, ...] (Ray-style).
     """
-    result = get_cluster_status(cluster_kind)
-    try:
-        # Defensive lookups
-        spec = result.get("spec", {})
-        worker = spec.get("worker", {})
-        effective_replicas = int(worker.get("replicas"))
-
-        status = result.get("status", {})
-        nodes = status.get("nodes", []) or []
-
-        # workers = total nodes minus 1 head (if any nodes exist)
-        actual_workers = max(0, len(nodes) - 1) if nodes else 0
-        is_complete = (actual_workers == effective_replicas)
-
-        print(f"Expected worker nodes {effective_replicas}")
-        # Safe slice: show worker names if present
-        try:
-            print(f"Current worker nodes {nodes[1:]}")
-        except Exception:
-            print("Current worker nodes: <unavailable>")
-
-        return is_complete
-    except Exception as e:
-        print(f"[scaler] unable to compute scaling completeness: {e}")
-        return False
+    result = get_cluster_restart_status(cluster_kind=cluster_kind,node_type=node_type,restart_ts=restart_ts)
+    print(result)
+    return result.get("status")=="restarted_and_ready_counts_ok"
 
 
-def wait_until_scaling_complete(cluster_kind: str = "rayclusters") -> bool:
+def wait_until_scaling_complete(cluster_kind: str = "rayclusters",scale_start_ts:str="") -> bool:
     """
     Poll until scaling completes. (No interface change: fixed 2s poll, no explicit timeout.)
     Returns True when complete.
     """
-    is_complete = is_scaling_complete(cluster_kind)
+    is_complete = is_restart_complete(cluster_kind,node_type="worker",restart_ts=scale_start_ts)
     while not is_complete:
         print("Scaling not yet done...")
         time.sleep(2)
-        is_complete = is_scaling_complete(cluster_kind)
+        is_complete = is_restart_complete(cluster_kind,node_type="worker",restart_ts=scale_start_ts)
     return is_complete
 
 
-
-
-
-def restart_head_node(cluster_kind: str = "rayclusters"):
+def restart_head_node(cluster_kind: str = "rayclusters",head_hw_tier_name:str="Small"):
     """
     Initiate a head restart by deleting the head pod.
     Server expects a started_at timestamp in the query; we generate one here.
@@ -256,12 +249,15 @@ def restart_head_node(cluster_kind: str = "rayclusters"):
 
     # Server route: PATCH /ddl_cluster_scaler/restart-head/<kind>/<name>?started_at=ISO8601
     url = f"{BASE_URL}{SERVICE_PREFIX}/restart_head/{cluster_kind}/{cluster_id}"
-    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
+    
+    body: Dict[str, Any] = {}
+    if head_hw_tier_name:
+        # Backward/forward compatibility: send both keys
+        body["head_hw_tier_name"] = head_hw_tier_name
     resp = requests.patch(
         url,
         headers=get_auth_headers(),
-        params={"started_at": stamp},
+        json=body,
         timeout=(3.05, 15),
     )
     print(f"Status code {resp.status_code}")
@@ -272,53 +268,18 @@ def restart_head_node(cluster_kind: str = "rayclusters"):
     except Exception:
         return resp.text
 
-
-def restart_head_node_status(cluster_kind: str = "rayclusters", restarted_since: str = "2099-12-31T00:00:00Z"):
+def wait_until_head_restart_complete(cluster_kind: str = "rayclusters",restart_ts:str="") -> bool:
     """
-    Check whether the head pod was restarted on/after `restarted_since` AND is Ready now.
-    Uses namespace + head pod name behind the scenes (no interface change).
+    Poll until scaling completes. (No interface change: fixed 2s poll, no explicit timeout.)
+    Returns True when complete.
     """
-    run_id = os.environ.get("DOMINO_RUN_ID")
-    if not run_id:
-        raise RuntimeError("DOMINO_RUN_ID is not set")
+    is_complete = is_restart_complete(cluster_kind,node_type="head",restart_ts=restart_ts)
+    while not is_complete:
+        print("Head restart not yet...")
+        time.sleep(2)
+        is_complete = is_restart_complete(cluster_kind,node_type="worker",restart_ts=scale_start_ts)
+    return is_complete
 
-    cluster_id_prefix = cluster_kind.replace("clusters", "")
-    cluster_id = f"{cluster_id_prefix}-{run_id}"
-
-    # Server route: GET /ddl_cluster_scaler/restart_head_status/<namespace>/<pod>?started_at=ISO8601
-    # Derive the head pod name (e.g., "<cluster>-head-0" for Ray)
-    pod_name = f"{cluster_id}-head-0"
-    url = f"{BASE_URL}{SERVICE_PREFIX}/restart_head_status/{cluster_kind}/{cluster_id}"
-    params = {"started_at": restarted_since}
-
-    resp = requests.get(
-        url,
-        headers=get_auth_headers(),
-        params=params,
-        timeout=(3.05, 15),
-    )
-    print(f"Status code {resp.status_code}")
-    resp.raise_for_status()
-
-    try:
-        return resp.json()
-    except Exception:
-        return resp.text
-
-
-def wait_until_node_restarted(cluster_kind: str = "rayclusters", restarted_since: str = "2099-12-31T00:00:00Z"):
-    """
-    Poll until the head reports 'restarted_and_ready'.
-    (No interface change: fixed 3s poll; no explicit timeout.)
-    """
-    status = restart_head_node_status(cluster_kind, restarted_since).get("status")
-    print(status)
-    while status != "restarted_and_ready":
-        sleep_time = 3
-        print(f"Wait {sleep_time} seconds before checking again")
-        time.sleep(sleep_time)
-        status = restart_head_node_status(cluster_kind, restarted_since).get("status")
-        print(status)
 
 import json
 if __name__ == "__main__":
@@ -329,11 +290,13 @@ if __name__ == "__main__":
 
     j = scale_cluster(cluster_kind="rayclusters",worker_hw_tier_name="Medium", replicas=2)
     json.dumps(j, indent=2, sort_keys=True, ensure_ascii=False)
-    wait_until_scaling_complete(cluster_kind="rayclusters")
+    
+    
+    wait_until_scaling_complete(cluster_kind="rayclusters",scale_start_ts=j['started_at'])
 
-    restart_head_node(cluster_kind="rayclusters")
+    restart_head_node(cluster_kind="rayclusters",head_hw_tier_name="Medium")
     restarts_at = j['started_at']
     print(restarts_at)
 
     print(restart_head_node_status(cluster_kind="rayclusters",restarted_since=restarts_at))
-    wait_until_node_restarted(cluster_kind="rayclusters",restarted_since=restarts_at)
+    wait_until_head_restart_complete(cluster_kind="rayclusters",restarted_since=restarts_at)
