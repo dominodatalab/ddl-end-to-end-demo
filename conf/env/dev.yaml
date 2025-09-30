@@ -1,5 +1,4 @@
 env: dev   
-
 ray:
   num_workers: 4
   cpus_per_worker: 1

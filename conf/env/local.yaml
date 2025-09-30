@@ -1,0 +1,7 @@
+env: local   
+app:  
+  data_dir: "/mnt/data/end-to-end/california"
+ray:
+  num_workers: 2
+  cpus_per_worker: 1
+  dev_fast: true
