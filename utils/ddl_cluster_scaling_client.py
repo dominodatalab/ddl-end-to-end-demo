@@ -220,7 +220,7 @@ def wait_until_scaling_complete(cluster_kind: str = "rayclusters") -> bool:
     is_complete = is_restart_complete(cluster_kind,node_type="worker")
     while not is_complete:
         print("Scaling not yet done...")
-        time.sleep(2)
+        time.sleep(10)
         is_complete = is_restart_complete(cluster_kind,node_type="worker")
     return is_complete
 
@@ -269,7 +269,7 @@ def wait_until_head_restart_complete(cluster_kind: str = "rayclusters",restart_t
     is_complete = is_restart_complete(cluster_kind,node_type="head",restart_ts=restart_ts)
     while not is_complete:
         print("Head restart not yet...")
-        time.sleep(2)
+        time.sleep(10)
         is_complete = is_restart_complete(cluster_kind,node_type="worker",restart_ts=scale_start_ts)
     return is_complete
 
