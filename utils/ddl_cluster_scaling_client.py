@@ -259,18 +259,18 @@ def restart_head_node(cluster_kind: str = "rayclusters",head_hw_tier_name:str="S
     except Exception:
         return resp.text
 
-def wait_until_head_restart_complete(cluster_kind: str = "rayclusters",restart_ts:str="") -> bool:
+def wait_until_head_restart_complete(cluster_kind: str = "rayclusters") -> bool:
     """
     Poll until scaling completes. (No interface change: fixed 2s poll, no explicit timeout.)
     Returns True when complete.
     """
     print("Waiting 10 seconds to give the head node some time to scale before we start polling")
     time.sleep(10)
-    is_complete = is_restart_complete(cluster_kind,node_type="head",restart_ts=restart_ts)
+    is_complete = is_restart_complete(cluster_kind,node_type="head")
     while not is_complete:
         print("Head restart not yet...")
         time.sleep(10)
-        is_complete = is_restart_complete(cluster_kind,node_type="worker",restart_ts=scale_start_ts)
+        is_complete = is_restart_complete(cluster_kind,node_type="worker")
     return is_complete
 
 
